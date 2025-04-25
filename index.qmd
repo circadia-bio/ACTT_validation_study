@@ -1,0 +1,409 @@
+---
+title: "ACTT validation study"
+format: 
+  html:
+    self-contained: true
+editor_options: 
+  chunk_output_type: inline
+---
+
+# 📦 Load Required Libraries
+
+```{r}
+#| warning: false
+library(tidyverse)
+library(caret)
+library(MuMIn)
+library(MetBrewer)
+library(broom)
+library(cowplot)
+library(pROC)
+```
+
+# 🎨 Set Theme and Color Palette
+
+```{r}
+pal <- met.brewer("Archambault", 11)[c(1,4,6,8)]
+
+theme_set(theme_bw() + 
+            theme_bw(base_size = 14, 
+                     base_family = "Helvetica") + 
+            theme(panel.border = element_rect(linewidth = 1.5)))
+```
+
+# 📁 Load and View Data
+
+```{r}
+#| warning: false
+df <- readr::read_csv(file = 'data/acttrust_validation_full.csv')
+df
+```
+
+# 🔍 ANOVA and Post-Hoc Tests
+
+## ⚖️️ ANOVA by Device and Condition
+
+```{r}
+df %>% 
+  dplyr::filter(Conditions != 'Sit-Stands') %>% 
+  tidyr::pivot_longer(cols = contains(c('GT', 'ACT')), names_to = 'act', values_to = 'act_value') %>% 
+  dplyr::mutate(act = relevel(as.factor(act), ref = 'GT3X+ (hip)')) %>% 
+  dplyr::mutate(Conditions = relevel(as.factor(Conditions), ref = 'Rest')) %>% 
+  lm(formula = sqrt(act_value) ~ Conditions:act, data = .) %>% 
+  aov() %>% 
+  summary()
+```
+
+## 🔬 Tukey Post-Hoc
+
+```{r}
+aov_model <-df %>% 
+  dplyr::filter(Conditions != 'Sit-Stands') %>% 
+  tidyr::pivot_longer(cols = contains(c('GT', 'ACT')), names_to = 'act', values_to = 'act_value') %>% 
+  dplyr::mutate(act = relevel(as.factor(act), ref = 'GT3X+ (hip)')) %>% 
+  dplyr::mutate(Conditions = relevel(as.factor(Conditions), ref = 'Rest')) %>% 
+  lm(formula = sqrt(act_value) ~ Conditions:act, data = .) %>% 
+  aov()
+
+tukey_res <- TukeyHSD(aov_model)
+tidy_tukey <- tidy(tukey_res)
+
+tidy_tukey
+```
+
+# 🔗 Correlation Matrix of Devices
+
+```{r}
+cor_matrix <- df %>% 
+  dplyr::filter(Conditions != 'Sit-Stands') %>% 
+  dplyr::select(contains(c('GT', 'ACT'))) %>% 
+  tidyr::drop_na() %>% 
+  cor(., method = "pearson")
+
+cor_melt <- reshape2::melt(cor_matrix)
+cor_melt$Var2 <- factor(cor_melt$Var2, levels = rev(levels(cor_melt$Var2)))
+
+ggplot(cor_melt, aes(x = Var1, y = Var2, fill = value)) +
+  geom_tile() +
+  scale_fill_gradient(low = met.brewer("Archambault", 11)[6], 
+                      high = met.brewer("Archambault", 11)[4], 
+                      name = "Pearson\nCorrelation\n", 
+                      labels = scales::label_number(accuracy = 0.01)) +
+  xlab(element_blank()) + 
+  ylab(element_blank()) + 
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, 
+                                   size = 12, hjust = 1), 
+        axis.text.y = element_text(size = 12),
+        legend.title = element_text(size = 14), 
+        legend.text = element_text(size = 12)) +
+  coord_fixed()
+```
+
+# 📈 Linear Model and Predictions
+
+```{r}
+dfm <- df %>% 
+  dplyr::filter(!Conditions %in% c('Sit-Stands')) %>% 
+  dplyr::mutate(Conditions = factor(Conditions)) %>%
+  tidyr::drop_na() %>%
+  tidyr::pivot_longer(cols = contains(c('GT', 'ACT')), names_to = 'act', values_to = 'act_value') %>% 
+  dplyr::mutate(act = relevel(as.factor(act), ref = 'GT3X+ (hip)')) 
+
+lm(formula = sqrt(METs) ~ sqrt(act_value)*act, data = dfm) %>% 
+  summary()
+
+```
+
+# 📊 Plot Regression Fits
+
+```{r}
+
+cf <- lm(formula = sqrt(METs) ~ sqrt(act_value)*act, data = dfm) %>% 
+  coef()
+
+dfm %>% 
+  ggplot2::ggplot(aes(x = sqrt(act_value), y = sqrt(METs))) +
+  geom_point(aes(colour = act, shape = Conditions), size = 2.5) + 
+  geom_abline(intercept = cf[1], slope = cf[2], colour = pal[1], linewidth = 1.5) +
+  geom_abline(intercept = cf[1] + cf[3], slope = cf[2] + cf[6], colour = pal[2], linewidth = 1.5) +
+  geom_abline(intercept = cf[1] + cf[4], slope = cf[2] + cf[7], colour = pal[3], linewidth = 1.5) +
+  geom_abline(intercept = cf[1] + cf[5], slope = cf[2] + cf[8], colour = pal[4], linewidth = 1.5) +
+  scale_colour_manual(values = pal) + 
+  guides(colour = guide_legend(override.aes = list(size=5)), 
+         shape = guide_legend(override.aes = list(size=5))) + 
+  theme(legend.background = element_blank(), 
+        legend.title = element_blank()) + 
+  xlab(expression(Activity^{1/2})) + 
+  ylab(expression(MET^{1/2}))
+
+lm(formula = sqrt(METs) ~ sqrt(act_value)*act, data = dfm) %>% 
+  summary()
+```
+
+# 🔮 Classification Metrics
+
+## 🤖 Fit and Classify
+
+```{r}
+fit_MET <- lm(formula = sqrt(METs) ~ sqrt(act_value)*act, 
+              data = dfm)  %>% 
+  fitted()
+
+fit_MET <- fit_MET^2
+```
+
+```{r}
+lm(formula = sqrt(METs) ~ sqrt(act_value)*act, 
+              data = dfm) %>% 
+  summary()
+```
+
+
+```{r}
+# Define the function to classify METs
+calc_met_class <- function(met_values) {
+  classes <- cut(met_values,
+                 breaks = c(-Inf, 3, 6, 9, Inf),
+                 labels = c('[0,3)', '[3,6)', '[6,9)', '[9,inf)'),
+                 right = FALSE)
+  return(classes)
+}
+
+dft_pred <- dfm %>% 
+  dplyr::select(Conditions, METs, act_value, BMI, ID) %>%
+  dplyr::mutate(fit_MET^2) %>% 
+  dplyr::mutate(actual_class = cut(METs,
+                 breaks = c(-Inf, 3, 6, 9, Inf),
+                 labels = c('[0,3)', '[3,6)', '[6,9)', '[9,inf)'),
+                 right = FALSE)) %>% 
+  dplyr::mutate(predicted_class = calc_met_class(fit_MET))
+
+caret::confusionMatrix(dft_pred$predicted_class, dft_pred$actual_class)
+cm <- caret::confusionMatrix(dft_pred$predicted_class, dft_pred$actual_class)
+cm_df <- as.data.frame(prop.table(cm$table, margin = 1))
+
+cm_df$Reference <- factor(cm_df$Reference, levels = rev(levels(cm_df$Reference)))
+```
+
+## 📊 Confusion Matrix Plot
+
+```{r}
+ggplot(data = cm_df, aes(x = Prediction, y = Reference, fill = Freq)) +
+  geom_tile() +
+  geom_text(aes(label = sprintf("%.2f", Freq)), color = "white", size = 5) +
+  scale_fill_gradient(low = "white", high = met.brewer("Archambault", 11)[3]) +
+  theme(legend.position = "none") + 
+  labs(title = "Confusion Matrix", x = "Predicted Class", y = "True Class")
+```
+
+## 📈 AUC by Class
+
+```{r}
+# Prepare
+actual_class <- factor(dft_pred$actual_class, 
+                       levels = c('[0,3)', '[3,6)', '[6,9)', '[9,inf)'))
+
+# Store results
+auc_results <- data.frame(Class = character(), AUC = numeric())
+
+# Loop over each class and compute one-vs-rest AUC
+for (lvl in levels(actual_class)) {
+  binary_actual <- as.numeric(actual_class == lvl)  # 1 if true class, else 0
+  roc_obj <- roc(binary_actual, fit_MET)
+  auc_val <- auc(roc_obj)
+  auc_results <- rbind(auc_results, data.frame(Class = lvl, AUC = auc_val))
+}
+
+print(auc_results)
+
+```
+
+
+# 🧮 Device-Specific Cutoffs
+
+```{r}
+#| warning: false
+# Define the cut-off points
+cutoffs <- tibble::tibble(MET_values = c(3, 6, 9, 4, 8)) %>% 
+  dplyr::mutate(`GT3X+ (hip)` = (((sqrt(MET_values) - cf[1])/cf[2]))^2, 
+                `ACTT (hip)` = ((sqrt(MET_values) - cf[1] - cf[3])/(cf[2] + cf[6]))^2, 
+                `ACTT (wrist)` = ((sqrt(MET_values) - cf[1] - cf[4])/(cf[2] + cf[7]))^2, 
+                `GT3X+ (wrist)` = ((sqrt(MET_values) - cf[1] - cf[5])/(cf[2] + cf[8]))^2) %>% 
+  t()
+
+cutoffs[2:5,] %>% 
+  tibble::as.tibble() %>% 
+  dplyr::mutate(Actimeter = c('GT3X+ (hip)', 'ACTT (hip)', 'ACTT (wrist)', 'GT3X+ (wrist)')) %>% 
+  dplyr::rename('3'= V1, '6' = V2, '9' = V3, '4' = V4, '8' = V5) %>%
+  gt::gt()
+  
+```
+
+# 📊 Summary Plots
+
+```{r}
+#| warning: false
+#| fig-height: 12
+#| fig-width: 8
+
+sum_plot <- cowplot::plot_grid(
+  df %>% 
+  tidyr::pivot_longer(cols = contains(c('GT', 'ACT', 'MET')), names_to = 'act', values_to = 'act_value') %>% 
+  dplyr::filter(act == 'METs') %>% 
+  dplyr::filter(Conditions != 'Sit-Stands') %>% 
+  dplyr::mutate(Conditions = relevel(as.factor(Conditions), ref = 'Rest')) %>% 
+  
+  ggplot2::ggplot(aes(x = Conditions, y = act_value)) + 
+  geom_point(aes(colour = act), position = position_jitterdodge(0.5), size = 3, alpha = 0.4) + 
+  geom_boxplot(fill = NA, outliers = FALSE) + 
+  geom_smooth(aes(group = act), 
+              colour = 'grey50', 
+              linetype = 'dashed', 
+              method = 'loess', 
+              se = FALSE, 
+              size = 0.8) + 
+  facet_wrap(~act, scales = 'free_y') + 
+  scale_colour_manual(values = 'grey70') + 
+  theme(legend.position = "none", axis.text.x = element_text(angle = 45, hjust = 1)) + 
+  ylab(expression("Metabolic Equivalents (VO"^2*")")) + 
+  xlab(element_blank()), 
+  df %>% 
+  tidyr::pivot_longer(cols = contains(c('GT', 'ACT', 'MET')), names_to = 'act', values_to = 'act_value') %>% 
+  dplyr::filter(act != 'METs') %>% 
+  dplyr::filter(Conditions != 'Sit-Stands') %>% 
+  dplyr::mutate(act = relevel(as.factor(act), ref = 'GT3X+ (hip)'), 
+                Conditions = relevel(as.factor(Conditions), ref = 'Rest')) %>% 
+  dplyr::mutate(act = factor(act, levels = c("GT3X+ (hip)", "GT3X+ (wrist)", "ACTT (hip)", "ACTT (wrist)"))) %>% 
+
+  
+  ggplot2::ggplot(aes(x = Conditions, y = act_value)) + 
+  geom_point(aes(colour = act), position = position_jitterdodge(1.2), size = 2, alpha = 0.4) + 
+  geom_boxplot(fill = NA, outliers = FALSE) + 
+  geom_smooth(aes(group = act), 
+              colour = 'grey50', 
+              linetype = 'dashed', 
+              method = 'loess', 
+              se = FALSE, 
+              size = 0.8) + 
+  facet_wrap(~act, scales = 'free_y') + 
+  scale_colour_manual(values = c(pal[1],pal[4],pal[2],pal[3])) + 
+  theme(legend.position = "none", axis.text.x = element_text(angle = 45, hjust = 1)) + 
+  ylab(expression("Activity Counts (counts·min"^-1*")")) + 
+  xlab(element_blank()), 
+  ncol = 1, 
+  labels = c('a', 'b'))
+sum_plot
+```
+
+# Device-specific confusion matrix
+
+```{r}
+# First, calculate fit_MET and add it to dfm
+fit_MET <- lm(formula = sqrt(METs) ~ sqrt(act_value) * act, data = dfm) %>%
+  fitted() %>%
+  `^`(2)  # Square the fitted values
+
+# Append fit_MET as a column
+dfm <- dfm %>%
+  mutate(fit_MET = fit_MET)
+
+# Define device types
+device_types <- c('GT3X+ (hip)', 'GT3X+ (wrist)', 'ACTT (hip)', 'ACTT (wrist)')
+
+# Store plots
+plots <- list()
+
+# GT3X+ (hip)
+dft_hip <- dfm %>%
+  filter(act == 'GT3X+ (hip)') %>%
+  select(Conditions, METs, act_value, BMI, ID, fit_MET) %>%
+  mutate(
+    actual_class = cut(METs, breaks = c(-Inf, 3, 6, 9, Inf),
+                       labels = c('[0,3)', '[3,6)', '[6,9)', '[9,inf)'), right = FALSE),
+    predicted_class = calc_met_class(fit_MET)
+  )
+
+cm_hip <- caret::confusionMatrix(dft_hip$predicted_class, dft_hip$actual_class)
+cm_df_hip <- as.data.frame(prop.table(cm_hip$table, margin = 1))
+cm_df_hip$Reference <- factor(cm_df_hip$Reference, levels = rev(levels(cm_df_hip$Reference)))
+
+plot_hip <- ggplot(data = cm_df_hip, aes(x = Prediction, y = Reference, fill = Freq)) +
+  geom_tile() +
+  geom_text(aes(label = sprintf("%.2f", Freq)), color = "white", size = 5) +
+  scale_fill_gradient(low = "white", high = pal[1]) +
+  theme(legend.position = "none") +
+  labs(title = "GT3X+ (hip)", x = "Predicted Class", y = "True Class")
+
+
+# GT3X+ (wrist)
+dft_wrist <- dfm %>%
+  filter(act == 'GT3X+ (wrist)') %>%
+  select(Conditions, METs, act_value, BMI, ID, fit_MET) %>%
+  mutate(
+    actual_class = cut(METs, breaks = c(-Inf, 3, 6, 9, Inf),
+                       labels = c('[0,3)', '[3,6)', '[6,9)', '[9,inf)'), right = FALSE),
+    predicted_class = calc_met_class(fit_MET)
+  )
+
+cm_wrist <- caret::confusionMatrix(dft_wrist$predicted_class, dft_wrist$actual_class)
+cm_df_wrist <- as.data.frame(prop.table(cm_wrist$table, margin = 1))
+cm_df_wrist$Reference <- factor(cm_df_wrist$Reference, levels = rev(levels(cm_df_wrist$Reference)))
+
+plot_wrist <- ggplot(data = cm_df_wrist, aes(x = Prediction, y = Reference, fill = Freq)) +
+  geom_tile() +
+  geom_text(aes(label = sprintf("%.2f", Freq)), color = "white", size = 5) +
+  scale_fill_gradient(low = "white", high = pal[4]) +
+  theme(legend.position = "none") +
+  labs(title = "GT3X+ (wrist)", x = "Predicted Class", y = "True Class")
+
+
+# ACTT (hip)
+dft_actt_hip <- dfm %>%
+  filter(act == 'ACTT (hip)') %>%
+  select(Conditions, METs, act_value, BMI, ID, fit_MET) %>%
+  mutate(
+    actual_class = cut(METs, breaks = c(-Inf, 3, 6, 9, Inf),
+                       labels = c('[0,3)', '[3,6)', '[6,9)', '[9,inf)'), right = FALSE),
+    predicted_class = calc_met_class(fit_MET)
+  )
+
+cm_actt_hip <- caret::confusionMatrix(dft_actt_hip$predicted_class, dft_actt_hip$actual_class)
+cm_df_actt_hip <- as.data.frame(prop.table(cm_actt_hip$table, margin = 1))
+cm_df_actt_hip$Reference <- factor(cm_df_actt_hip$Reference, levels = rev(levels(cm_df_actt_hip$Reference)))
+
+plot_actt_hip <- ggplot(data = cm_df_actt_hip, aes(x = Prediction, y = Reference, fill = Freq)) +
+  geom_tile() +
+  geom_text(aes(label = sprintf("%.2f", Freq)), color = "white", size = 5) +
+  scale_fill_gradient(low = "white", high = pal[2]) +
+  theme(legend.position = "none") +
+  labs(title = "ACTT (hip)", x = "Predicted Class", y = "True Class")
+
+
+# ACTT (wrist)
+dft_actt_wrist <- dfm %>%
+  filter(act == 'ACTT (wrist)') %>%
+  select(Conditions, METs, act_value, BMI, ID, fit_MET) %>%
+  mutate(
+    actual_class = cut(METs, breaks = c(-Inf, 3, 6, 9, Inf),
+                       labels = c('[0,3)', '[3,6)', '[6,9)', '[9,inf)'), right = FALSE),
+    predicted_class = calc_met_class(fit_MET)
+  )
+
+cm_actt_wrist <- caret::confusionMatrix(dft_actt_wrist$predicted_class, dft_actt_wrist$actual_class)
+cm_df_actt_wrist <- as.data.frame(prop.table(cm_actt_wrist$table, margin = 1))
+cm_df_actt_wrist$Reference <- factor(cm_df_actt_wrist$Reference, levels = rev(levels(cm_df_actt_wrist$Reference)))
+
+plot_actt_wrist <- ggplot(data = cm_df_actt_wrist, aes(x = Prediction, y = Reference, fill = Freq)) +
+  geom_tile() +
+  geom_text(aes(label = sprintf("%.2f", Freq)), color = "white", size = 5) +
+  scale_fill_gradient(low = "white", high = pal[3]) +
+  theme(legend.position = "none") +
+  labs(title = "ACTT (wrist)", x = "Predicted Class", y = "True Class")
+
+cowplot::plot_grid(plot_hip, 
+                   plot_wrist, 
+                   plot_actt_hip, 
+                   plot_actt_wrist, 
+                   ncol = 2, 
+                   labels = c('a', 'b', 'c', 'd'))
+```

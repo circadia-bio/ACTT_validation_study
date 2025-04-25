@@ -1,0 +1,11 @@
+version: "3"
+services:
+  r:
+    container_name: r-base
+    build: .
+    environment: 
+          - DISPLAY=$DISPLAY
+    volumes:
+          - "./src:/src"
+          - "./data:/data"
+    tty: true
