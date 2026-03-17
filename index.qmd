@@ -715,3 +715,46 @@ ba_met_data %>%
   theme(legend.position = 'bottom')
 ```
 
+## Plots test
+
+```{r}
+#| warning: false
+#| fig-height: 12
+#| fig-width: 8
+
+# Panel b — Activity counts, wrist placements only
+pb <- df %>% 
+  tidyr::pivot_longer(cols = contains(c('GT', 'ACT', 'MET')), 
+                      names_to  = 'act', 
+                      values_to = 'act_value') %>% 
+  dplyr::filter(act != 'METs') %>% 
+  dplyr::filter(Conditions != 'Sit-Stands') %>%
+  dplyr::filter(stringr::str_detect(act, 'wrist')) %>%
+  dplyr::mutate(
+    act        = relevel(as.factor(act), ref = 'GT3X+ (wrist)'), 
+    Conditions = relevel(as.factor(Conditions), ref = 'Rest'),
+    act        = factor(act, levels = c("GT3X+ (wrist)", "ACTT (wrist)"))
+  ) %>% 
+  ggplot2::ggplot(aes(x = Conditions, y = act_value)) + 
+  geom_point(aes(colour = act), 
+             position = pos_b,
+             size = 2, alpha = 0.4) + 
+  geom_text(aes(label = ID, colour = act),
+            position = pos_b,
+            size = 2, alpha = 0.6,
+            vjust = -0.6) +
+  geom_boxplot(fill = NA, outliers = FALSE) + 
+  geom_smooth(aes(group = act), 
+              colour   = 'grey50', 
+              linetype = 'dashed', 
+              method   = 'loess', 
+              se       = FALSE, 
+              size     = 0.8) + 
+  facet_wrap(~ act, scales = 'free_y', ncol = 1) + 
+  scale_colour_manual(values = c(pal[4], pal[3])) + 
+  theme(legend.position = "none", 
+        axis.text.x     = element_text(angle = 45, hjust = 1)) + 
+  ylab(expression("Activity Counts (counts·min"^-1*")")) + 
+  xlab(element_blank())
+```
+
