@@ -4,7 +4,7 @@ format:
   html:
     self-contained: true
 editor_options: 
-  chunk_output_type: inline
+  chunk_output_type: console
 ---
 
 # 📦 Load Required Libraries
@@ -12,20 +12,15 @@ editor_options:
 ```{r}
 #| warning: false
 
-# Data manipulation and visualisation
-library(tidyverse)
-# Classification metrics (confusion matrix, sensitivity, specificity)
-library(caret)
-# Multi-model inference (available for R² if needed)
-library(MuMIn)
-# Colour palettes inspired by the Metropolitan Museum of Art
-library(MetBrewer)
-# Tidy model output (used for Tukey HSD results)
-library(broom)
-# Multi-panel figure composition
-library(cowplot)
-# ROC curves and AUC
-library(pROC)
+library(tidyverse) # Data manipulation and visualisation
+library(caret) # Classification metrics (confusion matrix, sensitivity, specificity)
+library(MuMIn) # Multi-model inference (available for R² if needed)
+library(MetBrewer) # Colour palettes inspired by the Metropolitan Museum of Art
+library(broom) # Tidy model output (used for Tukey HSD results)
+library(cowplot) # Multi-panel figure composition
+library(pROC) # ROC curves and AUC
+library(lmtest) # Breusch-Pagan test
+library(car)    # VIF
 ```
 
 # 🎨 Set Theme and Color Palette
@@ -279,29 +274,88 @@ print(auc_results)
 
 ```{r}
 #| warning: false
-
-# Invert the regression equation to find the activity count threshold
-# corresponding to target MET values (3, 6, 9, and additionally 4 and 8).
+# ─────────────────────────────────────────────────────────────────────────────
+# Cut-point derivation with 95% CI via the delta method
+# The cut-point is a nonlinear function of model coefficients, so we use
+# the delta method (msm::deltamethod) to propagate uncertainty from the
+# coefficient covariance matrix into the cut-point scale.
 #
 # From MET^0.5 = β†0 + β†1 * Activity^0.5 :
 #   Activity = ((MET^0.5 - β†0) / β†1)^2
-#
-# β†0 and β†1 are device-specific intercepts and slopes derived from cf[].
-cutoffs <- tibble::tibble(MET_values = c(3, 6, 9, 4, 8)) %>% 
-  dplyr::mutate(
-    `GT3X+ (hip)`   = (((sqrt(MET_values) - cf[1])         /  cf[2]        ))^2, 
-    `ACTT (hip)`    = (( sqrt(MET_values) - cf[1] - cf[3]) / (cf[2] + cf[6]))^2, 
-    `ACTT (wrist)`  = (( sqrt(MET_values) - cf[1] - cf[4]) / (cf[2] + cf[7]))^2, 
-    `GT3X+ (wrist)` = (( sqrt(MET_values) - cf[1] - cf[5]) / (cf[2] + cf[8]))^2
-  ) %>% 
-  t()
+# ─────────────────────────────────────────────────────────────────────────────
 
-# Display as formatted table (Table 2 in manuscript)
-cutoffs[2:5, ] %>% 
-  tibble::as_tibble() %>% 
-  dplyr::mutate(Actimeter = c('GT3X+ (hip)', 'ACTT (hip)', 'ACTT (wrist)', 'GT3X+ (wrist)')) %>% 
-  dplyr::rename('3' = V1, '6' = V2, '9' = V3, '4' = V4, '8' = V5) %>%
-  gt::gt()
+# install.packages("msm") if needed
+library(msm)
+
+fit_lm <- lm(formula = sqrt(METs) ~ sqrt(act_value) * act, data = dfm)
+cf     <- coef(fit_lm)
+vc     <- vcov(fit_lm)
+
+# Helper: compute cut-point and 95% CI for a given MET threshold and device.
+# b0, b1   = device-specific intercept and slope (linear combinations of cf)
+# idx_b0, idx_b1 = named coefficient indices used to build the gradient
+# for deltamethod. g() expresses Activity as a function of model params x1..x8.
+# x1 = cf[1] (intercept), x2 = cf[2] (slope), x3..x5 = intercept adjustments,
+# x6..x8 = slope adjustments.
+cutpoint_ci <- function(met, b0_expr, b1_expr, form) {
+  est    <- ((sqrt(met) - b0_expr) / b1_expr)^2
+  se     <- msm::deltamethod(form, mean = cf, cov = vc)
+  ci_low <- est - 1.96 * se
+  ci_up  <- est + 1.96 * se
+  sprintf('%.0f (%.0f, %.0f)', est, ci_low, ci_up)
+}
+
+# Delta method formulae — x1..x8 map to cf[1]..cf[8] in order
+# GT3X+ (hip):   b0 = x1,       b1 = x2
+# ACTT (hip):    b0 = x1+x3,    b1 = x2+x6
+# ACTT (wrist):  b0 = x1+x4,    b1 = x2+x7
+# GT3X+ (wrist): b0 = x1+x5,    b1 = x2+x8
+forms <- list(
+  `GT3X+ (hip)`   = ~ ((sqrt(met) - x1)       / x2)^2,
+  `ACTT (hip)`    = ~ ((sqrt(met) - x1 - x3)  / (x2 + x6))^2,
+  `ACTT (wrist)`  = ~ ((sqrt(met) - x1 - x4)  / (x2 + x7))^2,
+  `GT3X+ (wrist)` = ~ ((sqrt(met) - x1 - x5)  / (x2 + x8))^2
+)
+
+b0s <- list(
+  `GT3X+ (hip)`   = cf[1],
+  `ACTT (hip)`    = cf[1] + cf[3],
+  `ACTT (wrist)`  = cf[1] + cf[4],
+  `GT3X+ (wrist)` = cf[1] + cf[5]
+)
+
+b1s <- list(
+  `GT3X+ (hip)`   = cf[2],
+  `ACTT (hip)`    = cf[2] + cf[6],
+  `ACTT (wrist)`  = cf[2] + cf[7],
+  `GT3X+ (wrist)` = cf[2] + cf[8]
+)
+
+met_thresholds <- c(3, 6, 9)
+
+# Build table: one row per device, one column per MET threshold
+# Each cell: estimate (lower CI, upper CI)
+cutoff_ci_table <- purrr::map_dfr(names(forms), function(dev) {
+  row <- purrr::map(met_thresholds, function(met) {
+    environment(forms[[dev]]) <- list2env(list(met = met))
+    cutpoint_ci(met, b0s[[dev]], b1s[[dev]], forms[[dev]])
+  })
+  names(row) <- as.character(met_thresholds)
+  tibble::tibble(Device = dev, !!!row)
+})
+
+cutoff_ci_table %>%
+  gt::gt() %>%
+  gt::cols_label(
+    Device = 'Device',
+    `3`    = '3 METs',
+    `6`    = '6 METs',
+    `9`    = '9 METs'
+  ) %>%
+  gt::tab_spanner(
+    label   = 'Cut-point, counts/min (95% CI)',
+    columns = c(`3`, `6`, `9`)
+  )
 ```
 
 # 📊 Summary Plots
@@ -543,11 +597,6 @@ dfm_sex <- dfm %>%
     predicted_class = calc_met_class(fit_MET)
   )
 
-sex_levels <- dfm_sex %>%
-  tidyr::drop_na(Sex) %>%
-  dplyr::pull(Sex) %>%
-  unique()
-
 # Refit model and append fitted METs
 fit_MET_sex <- lm(formula = sqrt(METs) ~ sqrt(act_value) * act,
                   data = dfm_sex) %>%
@@ -619,6 +668,10 @@ auc_sex <- purrr::map_dfr(sex_levels, function(s) {
 })
 
 print(auc_sex)
+
+auc_sex %>%
+    tidyr::pivot_wider(names_from  = Sex,
+                       values_from = AUC)
 ```
 
 
@@ -756,5 +809,86 @@ pb <- df %>%
         axis.text.x     = element_text(angle = 45, hjust = 1)) + 
   ylab(expression("Activity Counts (counts·min"^-1*")")) + 
   xlab(element_blank())
+```
+
+# Model diagnosis
+
+```{r}
+# ─────────────────────────────────────────────────────────────────────────────
+# Regression diagnostics
+# Tests assumptions of the linear model:
+#   1. Normality of residuals
+#   2. Homoscedasticity (constant variance)
+#   3. Multicollinearity
+# ─────────────────────────────────────────────────────────────────────────────
+
+fit <- lm(formula = sqrt(METs) ~ sqrt(act_value) * act, data = dfm)
+
+# --- 1. Normality of residuals -----------------------------------------------
+
+# Shapiro-Wilk test (H0: residuals are normally distributed)
+shapiro.test(residuals(fit))
+
+# Q-Q plot
+ggplot(data.frame(residuals = residuals(fit)), aes(sample = residuals)) +
+  stat_qq() +
+  stat_qq_line(colour = pal[1], linewidth = 0.8) +
+  labs(title = 'Normal Q-Q plot of residuals',
+       x     = 'Theoretical quantiles',
+       y     = 'Sample quantiles')
+
+# --- 2. Homoscedasticity -----------------------------------------------------
+
+# Breusch-Pagan test (H0: residuals have constant variance)
+# install.packages("lmtest") if needed
+lmtest::bptest(fit)
+
+# Residuals vs fitted plot
+ggplot(data.frame(fitted    = fitted(fit),
+                  residuals = residuals(fit)),
+       aes(x = fitted, y = residuals)) +
+  geom_point(alpha = 0.4, size = 2) +
+  geom_hline(yintercept = 0, colour = pal[1],
+             linewidth = 0.8, linetype = 'dashed') +
+  geom_smooth(method = 'loess', se = FALSE,
+              colour = 'grey50', linewidth = 0.7, linetype = 'dashed') +
+  labs(title = 'Residuals vs fitted',
+       x     = expression('Fitted values — ' * MET^{1/2}),
+       y     = 'Residuals')
+
+# --- 3. Multicollinearity ----------------------------------------------------
+
+# Variance inflation factors (VIF > 5 indicates problematic collinearity)
+# install.packages("car") if needed
+car::vif(fit)
+
+# --- Regression diagnostics plots — composite figure ------------------------
+
+diag_data <- data.frame(
+  fitted    = fitted(fit),
+  residuals = residuals(fit),
+  std_resid = sqrt(abs(rstandard(fit)))
+)
+
+p1 <- ggplot(diag_data, aes(sample = residuals)) +
+  stat_qq() +
+  stat_qq_line(colour = pal[1], linewidth = 0.8) +
+  labs(title = 'Normal Q-Q plot',
+       x     = 'Theoretical quantiles',
+       y     = 'Sample quantiles')
+
+p2 <- ggplot(diag_data, aes(x = fitted, y = residuals)) +
+  geom_point(alpha = 0.4, size = 2) +
+  geom_hline(yintercept = 0, colour = pal[1],
+             linewidth = 0.8, linetype = 'dashed') +
+  geom_smooth(method = 'loess', se = FALSE,
+              colour = 'grey50', linewidth = 0.7, linetype = 'dashed') +
+  labs(title = 'Residuals vs fitted',
+       x     = expression('Fitted values — ' * MET^{1/2}),
+       y     = 'Residuals')
+
+cowplot::plot_grid(p1, p2,
+                  ncol   = 2,
+                  labels = 'AUTO')
 ```
 
