@@ -16,6 +16,7 @@ All analyses read from a single file: **`data/acttrust_validation_full.csv`**
 | `ID` | character / integer | — | Unique participant identifier |
 | `Conditions` | character | — | Treadmill condition. Values: `Rest`, `3 km/h`, `5 km/h`, `7 km/h`, `9 km/h`, `Sit-Stands`. **`Sit-Stands` is excluded from all primary analyses.** |
 | `BMI` | numeric | kg/m² | Body mass index |
+| `Sex` | numeric | — | Female: 1. Male: 2 |
 
 ### Metabolic Measurement
 
