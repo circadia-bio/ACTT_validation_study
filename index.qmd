@@ -291,32 +291,10 @@ fit_lm <- lm(formula = sqrt(METs) ~ sqrt(act_value) * act, data = dfm)
 cf     <- coef(fit_lm)
 vc     <- vcov(fit_lm)
 
-# Helper: compute cut-point and 95% CI for a given MET threshold and device.
-# b0, b1   = device-specific intercept and slope (linear combinations of cf)
-# idx_b0, idx_b1 = named coefficient indices used to build the gradient
-# for deltamethod. g() expresses Activity as a function of model params x1..x8.
-# x1 = cf[1] (intercept), x2 = cf[2] (slope), x3..x5 = intercept adjustments,
-# x6..x8 = slope adjustments.
-cutpoint_ci <- function(met, b0_expr, b1_expr, form) {
-  est    <- ((sqrt(met) - b0_expr) / b1_expr)^2
-  se     <- msm::deltamethod(form, mean = cf, cov = vc)
-  ci_low <- est - 1.96 * se
-  ci_up  <- est + 1.96 * se
-  sprintf('%.0f (%.0f, %.0f)', est, ci_low, ci_up)
-}
-
-# Delta method formulae — x1..x8 map to cf[1]..cf[8] in order
-# GT3X+ (hip):   b0 = x1,       b1 = x2
-# ACTT (hip):    b0 = x1+x3,    b1 = x2+x6
-# ACTT (wrist):  b0 = x1+x4,    b1 = x2+x7
-# GT3X+ (wrist): b0 = x1+x5,    b1 = x2+x8
-forms <- list(
-  `GT3X+ (hip)`   = ~ ((sqrt(met) - x1)       / x2)^2,
-  `ACTT (hip)`    = ~ ((sqrt(met) - x1 - x3)  / (x2 + x6))^2,
-  `ACTT (wrist)`  = ~ ((sqrt(met) - x1 - x4)  / (x2 + x7))^2,
-  `GT3X+ (wrist)` = ~ ((sqrt(met) - x1 - x5)  / (x2 + x8))^2
-)
-
+# Device-specific intercepts (b0) and slopes (b1)
+# x1 = cf[1] (intercept), x2 = cf[2] (slope),
+# x3..x5 = intercept adjustments for ACTT(hip), ACTT(wrist), GT3X+(wrist)
+# x6..x8 = slope adjustments for the same devices
 b0s <- list(
   `GT3X+ (hip)`   = cf[1],
   `ACTT (hip)`    = cf[1] + cf[3],
@@ -335,10 +313,23 @@ met_thresholds <- c(3, 6, 9)
 
 # Build table: one row per device, one column per MET threshold
 # Each cell: estimate (lower CI, upper CI)
-cutoff_ci_table <- purrr::map_dfr(names(forms), function(dev) {
+cutoff_ci_table <- purrr::map_dfr(names(b0s), function(dev) {
   row <- purrr::map(met_thresholds, function(met) {
-    environment(forms[[dev]]) <- list2env(list(met = met))
-    cutpoint_ci(met, b0s[[dev]], b1s[[dev]], forms[[dev]])
+
+    # Build formula with met value substituted in as a literal number
+    # so deltamethod receives a fully numeric formula
+    form <- switch(dev,
+      'GT3X+ (hip)'   = as.formula(paste0('~ ((', sqrt(met), ' - x1) / x2)^2')),
+      'ACTT (hip)'    = as.formula(paste0('~ ((', sqrt(met), ' - x1 - x3) / (x2 + x6))^2')),
+      'ACTT (wrist)'  = as.formula(paste0('~ ((', sqrt(met), ' - x1 - x4) / (x2 + x7))^2')),
+      'GT3X+ (wrist)' = as.formula(paste0('~ ((', sqrt(met), ' - x1 - x5) / (x2 + x8))^2'))
+    )
+
+    est    <- ((sqrt(met) - b0s[[dev]]) / b1s[[dev]])^2
+    se     <- msm::deltamethod(form, mean = cf, cov = vc)
+    ci_low <- est - 1.96 * se
+    ci_up  <- est + 1.96 * se
+    sprintf('%.0f (%.0f, %.0f)', est, ci_low, ci_up)
   })
   names(row) <- as.character(met_thresholds)
   tibble::tibble(Device = dev, !!!row)
