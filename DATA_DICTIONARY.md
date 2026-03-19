@@ -69,7 +69,7 @@ These variables do not exist in the CSV but are computed in `ACTT_validation_stu
 ## Participant Characteristics (Reported in Table 1 of Manuscript)
 
 These summary statistics are reported in the paper but individual-level anthropometric
-data beyond `ID` and `BMI` are not present as separate columns in the CSV.
+data beyond `ID`, `BMI` and `Sex` are not present as separate columns in the CSV.
 Full demographic data are available in the Zenodo archive.
 
 | Characteristic | Male (n=34) | Female (n=22) |
