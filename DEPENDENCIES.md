@@ -30,21 +30,29 @@ install.packages(c(
   "cowplot",
   "pROC",
   "reshape2",
-  "gt"
+  "gt",
+  "lmtest",
+  "car",
+  "msm",
+  "effectsize"
 ))
 ```
 
-| Package | Version used | Purpose | Citation |
-|---------|-------------|---------|----------|
-| tidyverse | ≥ 2.0.0 | Data manipulation and ggplot2 visualisation (includes dplyr, tidyr, ggplot2, readr, purrr) | Wickham et al. (2019) J Open Source Softw 4(43):1686 |
-| caret | ≥ 6.0 | Confusion matrix and per-class classification metrics | Kuhn (2008) J Stat Softw 28(5):1–26 |
-| MuMIn | 1.48.4 | Multi-model inference; loaded but available for R² computation | Barton (2024) CRAN |
+| Package | Version | Purpose | Citation |
+|---------|---------|---------|----------|
+| tidyverse | 2.0.0 | Data manipulation and ggplot2 visualisation (includes dplyr, tidyr, ggplot2, readr, purrr) | Wickham et al. (2019) J Open Source Softw 4(43):1686 |
+| caret | 6.0.94 | Confusion matrix and per-class classification metrics | Kuhn (2008) J Stat Softw 28(5):1–26 |
+| MuMIn | 1.48.4 | Multi-model inference and R² computation | Barton (2024) CRAN |
 | MetBrewer | 0.2.0 | Colour palette — "Archambault" used throughout all figures | Mills (2022) CRAN |
 | broom | 1.0.6 | Tidy model output (`tidy()` for Tukey HSD results) | Robinson, Hayes & Couch (2024) CRAN |
 | cowplot | 1.1.3 | Multi-panel figure composition (`plot_grid()`) | Wilke (2024) CRAN |
-| pROC | ≥ 1.18 | One-vs-rest ROC curves and AUC per intensity class | Robin et al. (2011) BMC Bioinformatics 12:77 |
+| pROC | 1.18.5 | One-vs-rest ROC curves and AUC per intensity class | Robin et al. (2011) BMC Bioinformatics 12:77 |
 | reshape2 | ≥ 1.4 | `melt()` for correlation matrix to long format (Figure 2a) | Wickham (2007) J Stat Softw 21(12) |
-| gt | ≥ 0.9 | Cut-point summary table rendering in HTML output | Iannone et al. (2024) CRAN |
+| gt | ≥ 0.9 | Cut-point and AUC table rendering in HTML output | Iannone et al. (2024) CRAN |
+| lmtest | 0.9.40 | Breusch-Pagan test for homoscedasticity | Zeileis & Hothorn (2002) R News 2(3):7–10 |
+| car | 3.1.2 | Variance inflation factors (VIF) for multicollinearity | Fox & Weisberg (2019) Sage |
+| msm | 1.8.2 | Delta method for 95% CI propagation on nonlinear cut-points | Jackson (2011) J Stat Softw 38(8):1–29 |
+| effectsize | ≥ 0.8 | Eta-squared with 95% CI for ANOVA effect sizes | Ben-Shachar et al. (2020) J Open Source Softw 5(56):2815 |
 
 ---
 
@@ -57,7 +65,11 @@ pal <- MetBrewer::met.brewer("Archambault", 11)[c(1, 4, 6, 8)]
 ```
 
 These four colours map to: `GT3X+ (hip)`, `ACTT (hip)`, `ACTT (wrist)`, `GT3X+ (wrist)`
-respectively throughout all figures.
+respectively throughout all figures. A 5-colour variant is used for Bland-Altman plots:
+
+```r
+pal_ba <- MetBrewer::met.brewer("Archambault", 11)[c(1, 3, 4, 6, 8)]
+```
 
 ---
 
@@ -82,5 +94,9 @@ tables embedded. Chunk outputs are set to `inline`.
   point is performed in open-source R.
 - `reshape2::melt()` is the only function used from `reshape2`; it could be
   replaced with `tidyr::pivot_longer()` if preferred.
-- The `gt` package is used only for the cut-point table display in the HTML
-  output and is not required to reproduce statistical results.
+- The `gt` package is used for cut-point, equation, and AUC table display in
+  the HTML output and is not required to reproduce statistical results.
+- `lmtest`, `car`, `msm`, and `effectsize` are used in the supplementary
+  regression diagnostics and reviewer-requested analyses sections.
+- Verify your exact installed versions with `packageVersion("package_name")`
+  and update the table above accordingly before archiving.

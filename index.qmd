@@ -11,16 +11,17 @@ editor_options:
 
 ```{r}
 #| warning: false
-
-library(tidyverse) # Data manipulation and visualisation
-library(caret) # Classification metrics (confusion matrix, sensitivity, specificity)
-library(MuMIn) # Multi-model inference (available for R² if needed)
-library(MetBrewer) # Colour palettes inspired by the Metropolitan Museum of Art
-library(broom) # Tidy model output (used for Tukey HSD results)
-library(cowplot) # Multi-panel figure composition
-library(pROC) # ROC curves and AUC
-library(lmtest) # Breusch-Pagan test
-library(car)    # VIF
+library(tidyverse)  # Data wrangling and visualisation (dplyr, ggplot2, tidyr)
+library(caret)      # Confusion matrix, sensitivity, specificity, balanced accuracy
+library(MuMIn)      # Multi-model inference and R² computation
+library(MetBrewer)  # Colour palettes from the Metropolitan Museum of Art
+library(broom)      # Tidy model output (used for Tukey HSD)
+library(cowplot)    # Multi-panel figure composition
+library(pROC)       # ROC curves and AUC
+library(lmtest)     # Breusch-Pagan test for homoscedasticity
+library(car)        # Variance inflation factors (VIF) for multicollinearity
+library(msm)        # Delta method for CI propagation on nonlinear functions
+library(effectsize) # Effect sizes for ANOVA (eta-squared with 95% CI)
 ```
 
 # 🎨 Set Theme and Color Palette
@@ -58,21 +59,18 @@ df
 ## ⚖️️ ANOVA by Device and Condition
 
 ```{r}
-# Reshape to long format so that all four device-placement columns
-# become a single 'act' factor. Sit-Stands excluded.
-# Square-root transform applied to stabilise variance.
-# Reference levels: GT3X+ (hip) for device; Rest for condition.
-# Model: sqrt(act_value) ~ Conditions:act (interaction only, no main effects)
-df %>% 
+aov_model_orig <- df %>% 
   dplyr::filter(Conditions != 'Sit-Stands') %>% 
   tidyr::pivot_longer(cols = contains(c('GT', 'ACT')), 
-                      names_to = 'act', 
+                      names_to  = 'act', 
                       values_to = 'act_value') %>% 
-  dplyr::mutate(act = relevel(as.factor(act), ref = 'GT3X+ (hip)')) %>% 
-  dplyr::mutate(Conditions = relevel(as.factor(Conditions), ref = 'Rest')) %>% 
+  dplyr::mutate(act        = relevel(as.factor(act), ref = 'GT3X+ (hip)'),
+                Conditions = relevel(as.factor(Conditions), ref = 'Rest')) %>% 
   lm(formula = sqrt(act_value) ~ Conditions:act, data = .) %>% 
-  aov() %>% 
-  summary()
+  aov()
+
+summary(aov_model_orig)
+effectsize::eta_squared(aov_model_orig, partial = TRUE, ci = 0.95)
 ```
 
 ## 🔬 Tukey Post-Hoc
@@ -276,25 +274,14 @@ print(auc_results)
 #| warning: false
 # ─────────────────────────────────────────────────────────────────────────────
 # Cut-point derivation with 95% CI via the delta method
-# The cut-point is a nonlinear function of model coefficients, so we use
-# the delta method (msm::deltamethod) to propagate uncertainty from the
-# coefficient covariance matrix into the cut-point scale.
-#
-# From MET^0.5 = β†0 + β†1 * Activity^0.5 :
-#   Activity = ((MET^0.5 - β†0) / β†1)^2
 # ─────────────────────────────────────────────────────────────────────────────
 
-# install.packages("msm") if needed
-library(msm)
+
 
 fit_lm <- lm(formula = sqrt(METs) ~ sqrt(act_value) * act, data = dfm)
 cf     <- coef(fit_lm)
 vc     <- vcov(fit_lm)
 
-# Device-specific intercepts (b0) and slopes (b1)
-# x1 = cf[1] (intercept), x2 = cf[2] (slope),
-# x3..x5 = intercept adjustments for ACTT(hip), ACTT(wrist), GT3X+(wrist)
-# x6..x8 = slope adjustments for the same devices
 b0s <- list(
   `GT3X+ (hip)`   = cf[1],
   `ACTT (hip)`    = cf[1] + cf[3],
@@ -311,20 +298,15 @@ b1s <- list(
 
 met_thresholds <- c(3, 6, 9)
 
-# Build table: one row per device, one column per MET threshold
-# Each cell: estimate (lower CI, upper CI)
+# --- Cut-point table ---------------------------------------------------------
 cutoff_ci_table <- purrr::map_dfr(names(b0s), function(dev) {
   row <- purrr::map(met_thresholds, function(met) {
-
-    # Build formula with met value substituted in as a literal number
-    # so deltamethod receives a fully numeric formula
     form <- switch(dev,
       'GT3X+ (hip)'   = as.formula(paste0('~ ((', sqrt(met), ' - x1) / x2)^2')),
       'ACTT (hip)'    = as.formula(paste0('~ ((', sqrt(met), ' - x1 - x3) / (x2 + x6))^2')),
       'ACTT (wrist)'  = as.formula(paste0('~ ((', sqrt(met), ' - x1 - x4) / (x2 + x7))^2')),
       'GT3X+ (wrist)' = as.formula(paste0('~ ((', sqrt(met), ' - x1 - x5) / (x2 + x8))^2'))
     )
-
     est    <- ((sqrt(met) - b0s[[dev]]) / b1s[[dev]])^2
     se     <- msm::deltamethod(form, mean = cf, cov = vc)
     ci_low <- est - 1.96 * se
@@ -335,17 +317,59 @@ cutoff_ci_table <- purrr::map_dfr(names(b0s), function(dev) {
   tibble::tibble(Device = dev, !!!row)
 })
 
-cutoff_ci_table %>%
+# --- Equation table with 95% CI on betas ------------------------------------
+# SE for device-specific b0 and b1 via delta method
+# b0 forms
+b0_forms <- list(
+  `GT3X+ (hip)`   = ~ x1,
+  `ACTT (hip)`    = ~ x1 + x3,
+  `ACTT (wrist)`  = ~ x1 + x4,
+  `GT3X+ (wrist)` = ~ x1 + x5
+)
+
+# b1 forms
+b1_forms <- list(
+  `GT3X+ (hip)`   = ~ x2,
+  `ACTT (hip)`    = ~ x2 + x6,
+  `ACTT (wrist)`  = ~ x2 + x7,
+  `GT3X+ (wrist)` = ~ x2 + x8
+)
+
+equation_table <- purrr::map_dfr(names(b0s), function(dev) {
+
+  b0     <- b0s[[dev]]
+  b0_se  <- msm::deltamethod(b0_forms[[dev]], mean = cf, cov = vc)
+  b0_str <- sprintf('%.3f (%.3f, %.3f)', b0, b0 - 1.96 * b0_se, b0 + 1.96 * b0_se)
+
+  b1     <- b1s[[dev]]
+  b1_se  <- msm::deltamethod(b1_forms[[dev]], mean = cf, cov = vc)
+  b1_str <- sprintf('%.4f (%.4f, %.4f)', b1, b1 - 1.96 * b1_se, b1 + 1.96 * b1_se)
+
+  tibble::tibble(
+    Device    = dev,
+    Intercept = b0_str,
+    Slope     = b1_str
+  )
+})
+
+# --- Combined table ----------------------------------------------------------
+dplyr::left_join(cutoff_ci_table, equation_table, by = 'Device') %>%
   gt::gt() %>%
   gt::cols_label(
-    Device = 'Device',
-    `3`    = '3 METs',
-    `6`    = '6 METs',
-    `9`    = '9 METs'
+    Device    = 'Device',
+    `3`       = '3 METs',
+    `6`       = '6 METs',
+    `9`       = '9 METs',
+    Intercept = '\u03b20 (95% CI)',
+    Slope     = '\u03b21 (95% CI)'
   ) %>%
   gt::tab_spanner(
     label   = 'Cut-point, counts/min (95% CI)',
     columns = c(`3`, `6`, `9`)
+  ) %>%
+  gt::tab_spanner(
+    label   = 'MET\u00b9\u00b2 = \u03b20 + \u03b21 \u00d7 Activity\u00b9\u00b2',
+    columns = c(Intercept, Slope)
   )
 ```
 
@@ -766,6 +790,8 @@ ba_met_data %>%
 #| fig-height: 12
 #| fig-width: 8
 
+pos_b <- position_jitterdodge(1.2, seed = 42)
+
 # Panel b — Activity counts, wrist placements only
 pb <- df %>% 
   tidyr::pivot_longer(cols = contains(c('GT', 'ACT', 'MET')), 
@@ -800,6 +826,8 @@ pb <- df %>%
         axis.text.x     = element_text(angle = 45, hjust = 1)) + 
   ylab(expression("Activity Counts (counts·min"^-1*")")) + 
   xlab(element_blank())
+
+pb
 ```
 
 # Model diagnosis
