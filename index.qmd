@@ -380,74 +380,93 @@ dplyr::left_join(cutoff_ci_table, equation_table, by = 'Device') %>%
 #| fig-height: 12
 #| fig-width: 8
 
-# Figure 1: two-panel composite
-#   Panel a) METs by treadmill condition
-#   Panel b) Activity counts by condition, faceted by device × placement
+sex_shapes <- c('Male' = 15, 'Female' = 16)
+
+# Build legend plot separately
+legend_plot <- df %>%
+  dplyr::filter(Conditions != 'Sit-Stands') %>%
+  dplyr::mutate(Sex = factor(Sex, levels = c('Male', 'Female'))) %>%
+  ggplot2::ggplot(aes(x = Conditions, y = METs, shape = Sex)) +
+  geom_point(size = 5) +
+  scale_shape_manual(
+    values = sex_shapes,
+    guide  = guide_legend(override.aes = list(size = 6))
+  ) +
+  theme(legend.position = "bottom",
+        legend.title    = element_text(size = 14),
+        legend.text     = element_text(size = 12),
+        legend.key.size = unit(1.5, "lines"))
+
+legend_sex <- cowplot::get_plot_component(legend_plot, 
+                                          'guide-box-bottom', 
+                                          return_all = TRUE)
 
 sum_plot <- cowplot::plot_grid(
   
   # Panel a — METs
-  df %>% 
-    tidyr::pivot_longer(cols = contains(c('GT', 'ACT', 'MET')), 
-                        names_to  = 'act', 
-                        values_to = 'act_value') %>% 
-    dplyr::filter(act == 'METs') %>% 
-    dplyr::filter(Conditions != 'Sit-Stands') %>% 
-    dplyr::mutate(Conditions = relevel(as.factor(Conditions), ref = 'Rest')) %>% 
-    ggplot2::ggplot(aes(x = Conditions, y = act_value)) + 
-    geom_point(aes(colour = act), 
-               position = position_jitterdodge(0.5), 
-               size = 3, alpha = 0.4) + 
-    geom_boxplot(fill = NA, outliers = FALSE) + 
-    geom_smooth(aes(group = act), 
-                colour   = 'grey50', 
-                linetype = 'dashed', 
-                method   = 'loess', 
-                se       = FALSE, 
-                size     = 0.8) + 
-    facet_wrap(~ act, scales = 'free_y') + 
-    scale_colour_manual(values = 'grey70') + 
-    theme(legend.position  = "none", 
-          axis.text.x      = element_text(angle = 45, hjust = 1)) + 
-    ylab(expression("Metabolic Equivalents (VO"^2*")")) + 
-    xlab(element_blank()), 
-  
-  # Panel b — Activity counts, faceted by device × placement
-  df %>% 
-    tidyr::pivot_longer(cols = contains(c('GT', 'ACT', 'MET')), 
-                        names_to  = 'act', 
-                        values_to = 'act_value') %>% 
-    dplyr::filter(act != 'METs') %>% 
-    dplyr::filter(Conditions != 'Sit-Stands') %>% 
+  df %>%
+    dplyr::filter(Conditions != 'Sit-Stands') %>%
+    dplyr::mutate(Conditions = relevel(as.factor(Conditions), ref = 'Rest'),
+                  Sex        = factor(Sex, levels = c('Male', 'Female'))) %>%
+    ggplot2::ggplot(aes(x = Conditions, y = METs)) +
+    geom_point(aes(shape = Sex),
+               colour   = 'grey70',
+               position = position_jitterdodge(0.5),
+               size = 3, alpha = 0.4) +
+    geom_boxplot(fill = NA, outliers = FALSE) +
+    geom_smooth(colour   = 'grey50',
+                linetype = 'dashed',
+                method   = 'loess',
+                se       = FALSE,
+                size     = 0.8) +
+    scale_shape_manual(values = sex_shapes) +
+    theme(legend.position = "none",
+          axis.text.x     = element_text(angle = 45, hjust = 1)) +
+    ylab(expression("Metabolic Equivalents (VO"^2*")")) +
+    xlab(element_blank()),
+
+  # Panel b — Activity counts, faceted by device x placement
+  df %>%
+    tidyr::pivot_longer(cols      = c(`GT3X+ (hip)`, `GT3X+ (wrist)`,
+                                      `ACTT (hip)`,  `ACTT (wrist)`),
+                        names_to  = 'act',
+                        values_to = 'act_value') %>%
+    dplyr::filter(Conditions != 'Sit-Stands') %>%
     dplyr::mutate(
-      act        = relevel(as.factor(act), ref = 'GT3X+ (hip)'), 
+      act        = factor(act, levels = c("GT3X+ (hip)", "GT3X+ (wrist)",
+                                          "ACTT (hip)",  "ACTT (wrist)")),
       Conditions = relevel(as.factor(Conditions), ref = 'Rest'),
-      act        = factor(act, levels = c("GT3X+ (hip)", "GT3X+ (wrist)", 
-                                          "ACTT (hip)",  "ACTT (wrist)"))
-    ) %>% 
-    ggplot2::ggplot(aes(x = Conditions, y = act_value)) + 
-    geom_point(aes(colour = act), 
-               position = position_jitterdodge(1.2), 
-               size = 2, alpha = 0.4) + 
-    geom_boxplot(fill = NA, outliers = FALSE) + 
-    geom_smooth(aes(group = act), 
-                colour   = 'grey50', 
-                linetype = 'dashed', 
-                method   = 'loess', 
-                se       = FALSE, 
-                size     = 0.8) + 
-    facet_wrap(~ act, scales = 'free_y') + 
-    scale_colour_manual(values = c(pal[1], pal[4], pal[2], pal[3])) + 
-    theme(legend.position = "none", 
-          axis.text.x     = element_text(angle = 45, hjust = 1)) + 
-    ylab(expression("Activity Counts (counts·min"^-1*")")) + 
-    xlab(element_blank()), 
-  
-  ncol   = 1, 
+      Sex        = factor(Sex, levels = c('Male', 'Female'))
+    ) %>%
+    ggplot2::ggplot(aes(x = Conditions, y = act_value)) +
+    geom_point(aes(colour = act, shape = Sex),
+               position = position_jitterdodge(1.2),
+               size = 2, alpha = 0.4) +
+    geom_boxplot(fill = NA, outliers = FALSE) +
+    geom_smooth(aes(group = act),
+                colour   = 'grey50',
+                linetype = 'dashed',
+                method   = 'loess',
+                se       = FALSE,
+                size     = 0.8) +
+    facet_wrap(~ act, scales = 'free_y') +
+    scale_colour_manual(values = c(pal[1], pal[4], pal[2], pal[3])) +
+    scale_shape_manual(values = sex_shapes) +
+    theme(legend.position = "none",
+          axis.text.x     = element_text(angle = 45, hjust = 1)) +
+    ylab(expression("Activity Counts (counts·min"^-1*")")) +
+    xlab(element_blank()),
+
+  ncol   = 1,
   labels = c('a', 'b')
 )
 
-sum_plot
+cowplot::plot_grid(
+  sum_plot,
+  legend_sex,
+  ncol        = 1,
+  rel_heights = c(1, 0.04)
+)
 ```
 
 # Device-specific confusion matrices
